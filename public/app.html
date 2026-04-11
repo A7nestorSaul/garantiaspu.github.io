@@ -1,0 +1,143 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Dashboard | Garantías</title>
+  <link rel="stylesheet" href="/styles.css" />
+</head>
+<body>
+  <header class="top-bar">
+    <div>
+      <strong>Sistema de Garantías</strong>
+      <span id="welcome-user"></span>
+    </div>
+    <button id="logout-btn" class="btn-secondary">Cerrar sesión</button>
+  </header>
+
+  <nav class="nav-tabs">
+    <button class="tab active">Dashboard</button>
+    <button class="tab">Registros</button>
+  </nav>
+
+  <section class="reminder-bar" id="reminder-bar"></section>
+
+  <main class="container">
+    <section class="card">
+      <h2>Gestión de registros</h2>
+      <form id="record-form" class="form-grid">
+        <input type="hidden" id="record-id" />
+
+        <label>Referencia
+          <input type="text" id="referencia" required />
+        </label>
+
+        <label>Naviera
+          <input type="text" id="naviera" required />
+        </label>
+
+        <label>BL
+          <input type="text" id="bl" required />
+        </label>
+
+        <label>Total
+          <input type="number" id="total" min="0" step="0.01" required />
+        </label>
+
+        <label>Fecha de recuperación
+          <input type="date" id="fecha_recuperacion" required />
+        </label>
+
+        <label>Estatus
+          <select id="estatus" required>
+            <option value="Pendiente">Pendiente</option>
+            <option value="En proceso">En proceso</option>
+            <option value="Recuperado">Recuperado</option>
+            <option value="Pagado">Pagado</option>
+          </select>
+        </label>
+
+        <div class="form-actions">
+          <button type="submit" id="save-btn">Guardar registro</button>
+          <button type="button" id="cancel-edit" class="btn-secondary">Cancelar edición</button>
+        </div>
+      </form>
+    </section>
+
+    <section class="card">
+      <div class="table-header">
+        <h2>Registros</h2>
+        <div class="table-tools">
+          <label>Filtrar por naviera
+            <input type="text" id="filter-naviera" placeholder="Ej: Maersk" />
+          </label>
+          <label>Cargar Excel/CSV
+            <input type="file" id="file-upload" accept=".csv,.xlsx,.xls" />
+          </label>
+        </div>
+      </div>
+
+      <table>
+        <thead>
+          <tr>
+            <th>Referencia</th>
+            <th>Naviera</th>
+            <th>BL</th>
+            <th>Total</th>
+            <th>Fecha de recuperación</th>
+            <th>Estatus</th>
+            <th>Acciones</th>
+          </tr>
+        </thead>
+        <tbody id="records-body"></tbody>
+      </table>
+      <p id="records-message" class="message"></p>
+    </section>
+
+    <section class="card">
+      <h2>Pendientes</h2>
+      <p class="subtitle">Registros vencidos (fecha pasada) que no están en estado pagado.</p>
+      <div id="pending-list"></div>
+    </section>
+
+    <section class="card">
+      <h2>Validación de pagos</h2>
+      <p class="subtitle">Sube archivo de ingresos (Excel), detecta coincidencias por concepto vs BL y confirma manualmente.</p>
+      <label>Archivo de ingresos (Excel)
+        <input type="file" id="payments-upload" accept=".xlsx,.xls" />
+      </label>
+      <div id="payment-suggestions" class="payment-suggestions"></div>
+    </section>
+
+    <section class="card">
+      <h2>Generación de documentos</h2>
+      <p class="subtitle">Crea plantillas con formato {{campo}}, genera PDF y guarda documentos.</p>
+
+      <form id="template-form" class="form-grid">
+        <label>Nombre de plantilla
+          <input type="text" id="template-name" placeholder="Ej: Carta de garantía" required />
+        </label>
+        <label>Contenido de plantilla
+          <textarea id="template-content" rows="5" placeholder="Referencia: {{referencia}}\nBL: {{bl}}\nNaviera: {{naviera}}" required></textarea>
+        </label>
+        <button type="submit">Guardar plantilla</button>
+      </form>
+
+      <div class="doc-tools">
+        <label>Registro
+          <select id="doc-record-select"></select>
+        </label>
+        <label>Plantilla
+          <select id="doc-template-select"></select>
+        </label>
+        <button type="button" id="generate-doc-btn">Generar PDF</button>
+      </div>
+
+      <div id="documents-list"></div>
+    </section>
+  </main>
+
+  <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+  <script src="/app.js"></script>
+</body>
+</html>
