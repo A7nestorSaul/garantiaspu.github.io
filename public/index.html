@@ -1,0 +1,132 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Sistema de Garantías - Fase 1</title>
+  <link rel="stylesheet" href="/public/styles.css" />
+</head>
+<body>
+  <section id="loginView" class="card login-card">
+    <h1>Ingreso al sistema</h1>
+    <p>Login simulado para comenzar.</p>
+    <form id="loginForm">
+      <input type="text" id="username" placeholder="Usuario" required />
+      <input type="password" id="password" placeholder="Contraseña" required />
+      <button type="submit">Entrar</button>
+    </form>
+    <p id="loginError" class="error"></p>
+  </section>
+
+  <section id="appView" class="hidden">
+    <header class="topbar">
+      <h2>Dashboard de Garantías</h2>
+      <div>
+        <span id="currentUser"></span>
+        <button id="logoutBtn">Salir</button>
+      </div>
+    </header>
+
+    <nav class="nav-tabs">
+      <button class="active">Registros</button>
+      <button disabled>Reportes (próxima fase)</button>
+    </nav>
+
+    <main class="content">
+      <section class="card">
+        <div class="table-header">
+          <h3>Pendientes</h3>
+          <span id="pendingCount" class="pending-counter">0</span>
+        </div>
+        <div id="pendingList" class="pending-list">
+          <p class="muted">Sin pendientes por ahora.</p>
+        </div>
+      </section>
+
+      <section class="card">
+        <div class="table-header">
+          <h3>Validación de pagos</h3>
+        </div>
+        <div class="import-row">
+          <input type="file" id="paymentsFileInput" accept=".xlsx" />
+          <button type="button" id="validatePaymentsBtn">Validar ingresos</button>
+        </div>
+        <div id="paymentSuggestions" class="pending-list">
+          <p class="muted">Sube un Excel de ingresos para sugerir coincidencias por BL.</p>
+        </div>
+      </section>
+
+      <section class="card">
+        <div class="table-header">
+          <h3>Generación de documento</h3>
+        </div>
+        <div class="grid-form">
+          <select id="docRecordSelect">
+            <option value="">Selecciona registro...</option>
+          </select>
+          <select id="bankSelect">
+            <option value="">Selecciona banco...</option>
+          </select>
+          <input type="file" id="bankCoverInput" accept=".pdf" />
+          <input type="file" id="emailCaptureInput" accept=".jpg,.jpeg,.pdf" />
+          <input type="file" id="fiscalFileInput" accept=".pdf" />
+          <button type="button" id="generateDocBtn">Generar PDF unificado</button>
+        </div>
+        <p class="muted">Orden: Carta naviera → Carátula bancaria → Captura correo (opcional) → Constancia fiscal (primera hoja).</p>
+      </section>
+
+      <section class="card">
+        <h3 id="formTitle">Agregar registro</h3>
+        <form id="recordForm" class="grid-form">
+          <input type="hidden" id="recordId" />
+          <input type="text" id="referencia" placeholder="Referencia" required />
+          <input type="text" id="naviera" placeholder="Naviera" required />
+          <input type="text" id="bl" placeholder="BL" required />
+          <input type="number" id="total" step="0.01" placeholder="Total" required />
+          <input type="date" id="fecha_recuperacion" required />
+          <select id="estatus" required>
+            <option value="">Estatus...</option>
+            <option value="Pendiente">Pendiente</option>
+            <option value="En Proceso">En Proceso</option>
+            <option value="Recuperado">Recuperado</option>
+            <option value="Pagado">Pagado</option>
+          </select>
+          <div class="actions">
+            <button type="submit" id="saveBtn">Guardar</button>
+            <button type="button" id="cancelEdit" class="secondary hidden">Cancelar edición</button>
+          </div>
+        </form>
+      </section>
+
+      <section class="card">
+        <div class="table-header">
+          <h3>Registros</h3>
+          <input type="text" id="filterNaviera" placeholder="Filtrar por naviera" />
+        </div>
+        <div class="import-row">
+          <input type="file" id="fileInput" accept=".csv,.xlsx" />
+          <button type="button" id="importBtn">Cargar Excel/CSV</button>
+        </div>
+        <table>
+          <thead>
+            <tr>
+              <th>Referencia</th>
+              <th>Naviera</th>
+              <th>BL</th>
+              <th>Total</th>
+              <th>Fecha recuperación</th>
+              <th>Estatus</th>
+              <th>Indicador</th>
+              <th>Vigencias</th>
+              <th>Acciones</th>
+            </tr>
+          </thead>
+          <tbody id="recordsTableBody"></tbody>
+        </table>
+      </section>
+    </main>
+  </section>
+
+  <script src="/public/app.js"></script>
+</body>
+</html>
