@@ -15,15 +15,28 @@
     <button id="logout-btn" class="btn-secondary">Cerrar sesión</button>
   </header>
 
-  <nav class="nav-tabs">
-    <button class="tab active">Dashboard</button>
-    <button class="tab">Registros</button>
+  <nav class="nav-tabs" id="spa-nav">
+    <button class="tab active" data-view-btn="dashboard">Dashboard</button>
+    <button class="tab" data-view-btn="registros">Registros</button>
+    <button class="tab" data-view-btn="pendientes">Pendientes</button>
+    <button class="tab" data-view-btn="pagos">Validación de pagos</button>
+    <button class="tab" data-view-btn="documentos">Documentos</button>
+    <button class="tab" data-view-btn="admin">Administración</button>
   </nav>
 
-  <section class="reminder-bar" id="reminder-bar"></section>
-
   <main class="container">
-    <section class="card">
+    <section class="reminder-bar" id="reminder-bar"></section>
+
+    <section class="spa-view active" data-view="dashboard">
+      <section class="card">
+        <h2>Dashboard</h2>
+        <p class="subtitle">Resumen operativo del sistema y alertas de seguimiento.</p>
+        <div id="dashboard-summary"></div>
+      </section>
+    </section>
+
+    <section class="spa-view" data-view="registros">
+      <section class="card">
       <h2>Gestión de registros</h2>
       <form id="record-form" class="form-grid">
         <input type="hidden" id="record-id" />
@@ -93,14 +106,18 @@
       </table>
       <p id="records-message" class="message"></p>
     </section>
+    </section>
 
-    <section class="card">
+    <section class="spa-view" data-view="pendientes">
+      <section class="card">
       <h2>Pendientes</h2>
       <p class="subtitle">Registros vencidos (fecha pasada) que no están en estado pagado.</p>
       <div id="pending-list"></div>
     </section>
+    </section>
 
-    <section class="card">
+    <section class="spa-view" data-view="pagos">
+      <section class="card">
       <h2>Validación de pagos</h2>
       <p class="subtitle">Sube archivo de ingresos (Excel), detecta coincidencias por concepto vs BL y confirma manualmente.</p>
       <label>Archivo de ingresos (Excel)
@@ -108,8 +125,10 @@
       </label>
       <div id="payment-suggestions" class="payment-suggestions"></div>
     </section>
+    </section>
 
-    <section class="card">
+    <section class="spa-view" data-view="documentos">
+      <section class="card">
       <h2>Generación de documentos</h2>
       <p class="subtitle">Crea plantillas con formato {{campo}}, genera PDF y guarda documentos.</p>
 
@@ -134,6 +153,28 @@
       </div>
 
       <div id="documents-list"></div>
+    </section>
+    </section>
+
+    <section class="spa-view" data-view="admin">
+      <section class="card">
+        <h2>Administración</h2>
+        <p class="subtitle">Usuarios, permisos y configuración base del sistema.</p>
+        <form id="admin-user-form" class="form-grid">
+          <label>Usuario
+            <input id="admin-username" type="text" required />
+          </label>
+          <label>Rol
+            <select id="admin-role">
+              <option value="admin">admin</option>
+              <option value="operador">operador</option>
+              <option value="consulta">consulta</option>
+            </select>
+          </label>
+          <button type="submit">Crear usuario</button>
+        </form>
+        <div id="admin-users-list"></div>
+      </section>
     </section>
   </main>
 

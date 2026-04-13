@@ -27,6 +27,9 @@ Aplicación web funcional (base del sistema) con:
   - Control de roles (RBAC básico por header `X-User-Role`).
   - CORS restringido por origen permitido.
   - Security headers en respuestas HTTP.
+- SPA modular sin recarga de página con vistas: Dashboard, Registros, Pendientes, Pagos, Documentos y Administración.
+- Importación robusta de Excel por backend (`/api/import/excel`) leyendo todas las hojas y mapeando encabezados por alias.
+- Base para administración: usuarios, permisos y configuración del sistema.
 - Backend en Python (sin frameworks externos).
 - Base de datos SQLite.
 
@@ -49,12 +52,17 @@ Aplicación web funcional (base del sistema) con:
 ## Requisitos
 
 - Python 3.10+ recomendado.
+- Dependencias Python:
+  - openpyxl
+  - pypdf
+  - python-docx
 
 ## Cómo ejecutar
 
 1. Inicia el servidor:
 
 ```bash
+pip install -r requirements.txt
 python3 app.py
 ```
 
@@ -69,6 +77,7 @@ python3 app.py
 - `DEFAULT_ROLE`: rol por defecto para RBAC (`viewer`, `editor`, `admin`; default: `admin`).
 - `DB_PROVIDER`: proveedor de base de datos (`sqlite` por defecto).  
   > Se dejó la conectividad base preparada para extender a servicio externo en `db_connection()`.
+- `ALLOWED_ORIGIN`, `DEFAULT_ROLE`: control de seguridad.
 
 ## Uso básico
 

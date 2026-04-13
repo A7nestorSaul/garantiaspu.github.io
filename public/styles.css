@@ -173,6 +173,15 @@ button:active {
   gap: 16px;
 }
 
+.spa-view {
+  display: none;
+  gap: 16px;
+}
+
+.spa-view.active {
+  display: grid;
+}
+
 .form-actions {
   display: flex;
   gap: 10px;
@@ -288,6 +297,11 @@ tr:last-child td {
   display: grid;
   gap: 8px;
   background: #f8fafc;
+}
+
+.payment-compare {
+  display: flex;
+  gap: 6px;
 }
 
 .doc-tools {

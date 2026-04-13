@@ -24,6 +24,10 @@ const docTemplateSelect = document.getElementById('doc-template-select');
 const generateDocBtn = document.getElementById('generate-doc-btn');
 const documentsList = document.getElementById('documents-list');
 const reminderBar = document.getElementById('reminder-bar');
+const spaNav = document.getElementById('spa-nav');
+const dashboardSummary = document.getElementById('dashboard-summary');
+const adminUserForm = document.getElementById('admin-user-form');
+const adminUsersList = document.getElementById('admin-users-list');
 const filterInput = document.getElementById('filter-naviera');
 const uploadInput = document.getElementById('file-upload');
 const cancelBtn = document.getElementById('cancel-edit');
@@ -97,6 +101,7 @@ async function loadRecords() {
     renderRows(tableData);
     renderPendingSection(allData);
     renderDocRecords(allData);
+    renderDashboardSummary(allData);
   } catch (_error) {
     setMessage('No se pudieron cargar los registros.');
   }
@@ -120,6 +125,15 @@ function renderPendingSection(records) {
       `).join('')}
     </ul>
   `;
+}
+
+function setActiveView(viewName) {
+  document.querySelectorAll('.spa-view').forEach((section) => {
+    section.classList.toggle('active', section.dataset.view === viewName);
+  });
+  document.querySelectorAll('[data-view-btn]').forEach((button) => {
+    button.classList.toggle('active', button.dataset.viewBtn === viewName);
+  });
 }
 
 form.addEventListener('submit', async (event) => {
@@ -234,6 +248,38 @@ paymentsUpload.addEventListener('change', async (event) => {
   }
 });
 
+spaNav.addEventListener('click', (event) => {
+  const button = event.target.closest('[data-view-btn]');
+  if (!button) return;
+  setActiveView(button.dataset.viewBtn);
+});
+
+adminUserForm.addEventListener('submit', async (event) => {
+  event.preventDefault();
+  const username = document.getElementById('admin-username').value.trim();
+  const role = document.getElementById('admin-role').value;
+  if (!username) return;
+
+  const defaultPermissions = {
+    admin: ['ver_registros', 'editar_registros', 'validar_pagos', 'generar_documentos', 'administrar_sistema'],
+    operador: ['ver_registros', 'editar_registros', 'validar_pagos', 'generar_documentos'],
+    consulta: ['ver_registros']
+  };
+
+  const response = await fetch('/api/admin/users', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'X-User-Role': 'admin' },
+    body: JSON.stringify({ username, role, permissions: defaultPermissions[role] || [] })
+  });
+  const data = await response.json();
+  if (!response.ok) {
+    setMessage(data.message || 'No se pudo crear usuario.');
+    return;
+  }
+  adminUserForm.reset();
+  await loadAdminUsers();
+});
+
 templateForm.addEventListener('submit', async (event) => {
   event.preventDefault();
   const name = templateName.value.trim();
@@ -318,6 +364,7 @@ loadDocumentTemplates();
 loadGeneratedDocuments();
 loadReminders();
 setInterval(loadReminders, 60000);
+loadAdminUsers();
 paymentSuggestions.addEventListener('click', async (event) => {
   const button = event.target.closest('button[data-confirm-payment]');
   if (!button) return;
@@ -335,7 +382,7 @@ paymentSuggestions.addEventListener('click', async (event) => {
   const response = await fetch('/api/payments/confirm', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ record_id: recordId, concepto })
+    body: JSON.stringify({ record_id: recordId, concepto, matched_type: 'manual' })
   });
   const data = await response.json();
 
@@ -541,6 +588,9 @@ async function renderPaymentSuggestions(suggestions) {
         <div class="message">
           ${item.matches.length ? `Sugerencias encontradas: ${item.matches.length}` : 'Sin sugerencias automáticas, selecciona manualmente.'}
         </div>
+        <div class="payment-compare">
+          ${item.matches.map((m) => `<span class="status ${m.match_type === 'exact' ? 'status-paid' : 'status-progress'}">${m.match_type}</span>`).join(' ')}
+        </div>
         <select>
           <option value="">Selecciona una coincidencia</option>
           ${options}
@@ -551,4 +601,31 @@ async function renderPaymentSuggestions(suggestions) {
       </div>
     `;
   }).join('');
+}
+
+async function loadAdminUsers() {
+  try {
+    const response = await fetch('/api/admin/users', { headers: { 'X-User-Role': 'admin' } });
+    const users = await response.json();
+    adminUsersList.innerHTML = `
+      <ul class="doc-items">
+        ${users.map((user) => `<li>${user.username} — <strong>${user.role}</strong></li>`).join('')}
+      </ul>
+    `;
+  } catch (_error) {
+    adminUsersList.innerHTML = '<p class="message">No se pudieron cargar usuarios.</p>';
+  }
+}
+
+function renderDashboardSummary(records) {
+  const total = records.length;
+  const pagados = records.filter((r) => r.estatus === 'Pagado').length;
+  const pendientes = records.filter((r) => r.is_overdue_pending).length;
+  dashboardSummary.innerHTML = `
+    <div class="doc-tools">
+      <div class="card"><strong>Total registros:</strong> ${total}</div>
+      <div class="card"><strong>Pagados:</strong> ${pagados}</div>
+      <div class="card"><strong>Pendientes vencidos:</strong> ${pendientes}</div>
+    </div>
+  `;
 }

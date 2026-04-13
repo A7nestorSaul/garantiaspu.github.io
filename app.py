@@ -2,18 +2,25 @@ import json
 import os
 import re
 import sqlite3
+import base64
 from datetime import datetime
 from http import HTTPStatus
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 from uuid import uuid4
+from io import BytesIO
+
+from openpyxl import load_workbook
+from pypdf import PdfReader, PdfWriter
+from docx import Document
 
 ROOT = Path(__file__).parent
 PUBLIC_DIR = ROOT / 'public'
 DATA_DIR = ROOT / 'data'
 DB_PATH = DATA_DIR / 'garantias.db'
 DOCS_DIR = DATA_DIR / 'documents'
+UPLOADS_DIR = DATA_DIR / 'uploads'
 DB_PROVIDER = os.environ.get('DB_PROVIDER', 'sqlite').lower()
 DB_HOST = os.environ.get('DB_HOST', '')
 DB_PORT = os.environ.get('DB_PORT', '')
@@ -32,6 +39,7 @@ ROLE_PERMISSIONS = {
 
 DATA_DIR.mkdir(exist_ok=True)
 DOCS_DIR.mkdir(exist_ok=True)
+UPLOADS_DIR.mkdir(exist_ok=True)
 
 
 def init_db():
@@ -81,6 +89,52 @@ def init_db():
                 created_at TEXT NOT NULL,
                 FOREIGN KEY(record_id) REFERENCES records(id),
                 FOREIGN KEY(template_id) REFERENCES document_templates(id)
+            )
+            '''
+        )
+        conn.execute(
+            '''
+            CREATE TABLE IF NOT EXISTS payments (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                record_id INTEGER NOT NULL,
+                concepto TEXT NOT NULL,
+                amount REAL NOT NULL DEFAULT 0,
+                matched_type TEXT NOT NULL DEFAULT 'manual',
+                created_at TEXT NOT NULL,
+                FOREIGN KEY(record_id) REFERENCES records(id)
+            )
+            '''
+        )
+        conn.execute(
+            '''
+            CREATE TABLE IF NOT EXISTS users (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                username TEXT UNIQUE NOT NULL,
+                role TEXT NOT NULL,
+                permissions TEXT NOT NULL,
+                created_at TEXT NOT NULL
+            )
+            '''
+        )
+        conn.execute(
+            '''
+            CREATE TABLE IF NOT EXISTS system_configs (
+                key TEXT PRIMARY KEY,
+                value TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            )
+            '''
+        )
+        conn.execute(
+            '''
+            CREATE TABLE IF NOT EXISTS document_assets (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                record_id INTEGER,
+                asset_type TEXT NOT NULL,
+                provider_name TEXT,
+                filename TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                FOREIGN KEY(record_id) REFERENCES records(id)
             )
             '''
         )
@@ -186,6 +240,66 @@ def create_simple_pdf(content, output_path):
     )
 
     output_path.write_bytes(pdf)
+
+
+def sanitize_filename(name):
+    safe = re.sub(r'[^a-zA-Z0-9._-]', '_', name or '')
+    return safe[:120] or f'file_{uuid4().hex}.bin'
+
+
+def decode_base64_file(file_content):
+    return base64.b64decode(file_content.encode('utf-8'))
+
+
+def parse_excel_records(file_bytes, aliases):
+    workbook = load_workbook(filename=BytesIO(file_bytes), data_only=True)
+    records = []
+    errors = []
+    alias_map = {k.lower(): [x.lower() for x in v] for k, v in aliases.items()}
+
+    for sheet_name in workbook.sheetnames:
+        sheet = workbook[sheet_name]
+        rows = list(sheet.iter_rows(values_only=True))
+        if not rows:
+            continue
+
+        headers = [str(h).strip().lower() if h is not None else '' for h in rows[0]]
+        idx_map = {}
+        for field, candidates in alias_map.items():
+            for idx, header in enumerate(headers):
+                if header in candidates:
+                    idx_map[field] = idx
+                    break
+
+        missing = [field for field in ('referencia', 'naviera', 'bl') if field not in idx_map]
+        if missing:
+            errors.append(f'Hoja "{sheet_name}" sin encabezados requeridos: {", ".join(missing)}')
+            continue
+
+        for row_num, row in enumerate(rows[1:], start=2):
+            if row is None or all(cell in (None, '') for cell in row):
+                continue
+
+            def val(field, default=''):
+                idx = idx_map.get(field)
+                if idx is None or idx >= len(row):
+                    return default
+                return str(row[idx]).strip() if row[idx] is not None else default
+
+            record = {
+                'referencia': val('referencia'),
+                'naviera': val('naviera'),
+                'bl': val('bl'),
+                'total': float(val('total', '0') or 0),
+                'fecha_recuperacion': val('fecha_recuperacion', datetime.utcnow().strftime('%Y-%m-%d')),
+                'estatus': val('estatus', 'Pendiente') or 'Pendiente',
+            }
+            if not record['referencia'] or not record['naviera'] or not record['bl']:
+                errors.append(f'Fila inválida {sheet_name}!{row_num}: falta BL/Naviera/Referencia.')
+                continue
+            records.append(record)
+
+    return records, errors
 
 
 class AppHandler(SimpleHTTPRequestHandler):
@@ -296,6 +410,44 @@ class AppHandler(SimpleHTTPRequestHandler):
                     '''
                 ).fetchall()
             return self._send_json([dict(row) for row in rows])
+
+        if path == '/api/admin/users':
+            if not self._authorize('admin'):
+                return
+            with db_connection() as conn:
+                rows = conn.execute('SELECT id, username, role, permissions, created_at FROM users ORDER BY id DESC').fetchall()
+            return self._send_json([dict(row) for row in rows])
+
+        if path == '/api/admin/config':
+            if not self._authorize('admin'):
+                return
+            with db_connection() as conn:
+                rows = conn.execute('SELECT key, value, updated_at FROM system_configs ORDER BY key').fetchall()
+            return self._send_json([dict(row) for row in rows])
+
+        if path.startswith('/api/payments/summary/'):
+            if not self._authorize('read'):
+                return
+            try:
+                record_id = int(path.split('/')[-1])
+            except ValueError:
+                return self._send_json({'message': 'record_id inválido.'}, status=HTTPStatus.BAD_REQUEST)
+            with db_connection() as conn:
+                record = conn.execute('SELECT * FROM records WHERE id = ?', (record_id,)).fetchone()
+                if not record:
+                    return self._send_json({'message': 'Registro no encontrado.'}, status=HTTPStatus.NOT_FOUND)
+                total_paid = conn.execute('SELECT COALESCE(SUM(amount),0) AS paid FROM payments WHERE record_id = ?', (record_id,)).fetchone()['paid']
+                payments = conn.execute('SELECT id, concepto, amount, matched_type, created_at FROM payments WHERE record_id = ? ORDER BY id DESC', (record_id,)).fetchall()
+            total_record = float(record['total'])
+            return self._send_json(
+                {
+                    'record_id': record_id,
+                    'total_record': total_record,
+                    'total_paid': total_paid,
+                    'remaining': max(total_record - float(total_paid), 0),
+                    'payments': [dict(p) for p in payments],
+                }
+            )
 
         if path == '/api/reminders':
             with db_connection() as conn:
@@ -520,12 +672,14 @@ class AppHandler(SimpleHTTPRequestHandler):
                     bl = str(record['bl']).strip()
                     bl_lower = bl.lower()
                     if bl_lower and (bl_lower in concept_lower or concept_lower in bl_lower):
+                        match_type = 'exact' if bl_lower == concept_lower or f' {bl_lower} ' in f' {concept_lower} ' else 'partial'
                         match = {
                             'record_id': record['id'],
                             'referencia': record['referencia'],
                             'naviera': record['naviera'],
                             'bl': bl,
                             'estatus': record['estatus'],
+                            'match_type': match_type,
                         }
                         matches.append(match)
 
@@ -548,6 +702,8 @@ class AppHandler(SimpleHTTPRequestHandler):
                 return self._send_json({'message': 'record_id inválido.'}, status=HTTPStatus.BAD_REQUEST)
 
             concepto = str(data.get('concepto') or '').strip()
+            amount = float(data.get('amount') or 0)
+            matched_type = str(data.get('matched_type') or 'manual')
             if not concepto:
                 return self._send_json({'message': 'concepto es obligatorio.'}, status=HTTPStatus.BAD_REQUEST)
 
@@ -563,6 +719,14 @@ class AppHandler(SimpleHTTPRequestHandler):
                     ''',
                     (record_id, concepto, datetime.utcnow().isoformat(timespec='seconds')),
                 )
+                conn.execute(
+                    '''
+                    INSERT INTO payments (record_id, concepto, amount, matched_type, created_at)
+                    VALUES (?, ?, ?, ?, ?)
+                    ''',
+                    (record_id, concepto, amount, matched_type, datetime.utcnow().isoformat(timespec='seconds')),
+                )
+                total_paid = conn.execute('SELECT COALESCE(SUM(amount),0) AS paid FROM payments WHERE record_id = ?', (record_id,)).fetchone()['paid']
                 conn.execute('UPDATE records SET estatus = ? WHERE id = ?', ('Pagado', record_id))
                 updated = conn.execute('SELECT * FROM records WHERE id = ?', (record_id,)).fetchone()
                 normalized_record = apply_tracking_rule(conn, dict(updated))
@@ -571,6 +735,8 @@ class AppHandler(SimpleHTTPRequestHandler):
                 {
                     'message': 'Pago validado correctamente.',
                     'record': normalized_record,
+                    'total_paid': total_paid,
+                    'remaining': max(float(updated['total']) - float(total_paid), 0),
                 }
             )
 
@@ -642,6 +808,179 @@ class AppHandler(SimpleHTTPRequestHandler):
                     'file_url': f'/files/{filename}',
                 }
             )
+
+        if path == '/api/import/excel':
+            if not self._authorize('write'):
+                return
+            data = self._read_json_body()
+            file_content = data.get('file_content')
+            if not file_content:
+                return self._send_json({'message': 'file_content es obligatorio (base64).'}, status=HTTPStatus.BAD_REQUEST)
+            aliases = data.get(
+                'aliases',
+                {
+                    'referencia': ['referencia', 'ref'],
+                    'naviera': ['naviera', 'shipping line'],
+                    'bl': ['bl', 'b/l', 'guía', 'guia'],
+                    'total': ['total', 'monto'],
+                    'fecha_recuperacion': ['fecha de recuperación', 'fecha_recuperacion', 'fecha'],
+                    'estatus': ['estatus', 'estado'],
+                },
+            )
+            try:
+                file_bytes = decode_base64_file(file_content)
+                records, parse_errors = parse_excel_records(file_bytes, aliases)
+            except Exception as error:
+                return self._send_json({'message': f'Error al leer Excel: {error}'}, status=HTTPStatus.BAD_REQUEST)
+
+            inserted = []
+            with db_connection() as conn:
+                for record in records:
+                    error = self._validate_payload(record)
+                    if error:
+                        parse_errors.append(f'{record.get("referencia","N/A")}: {error}')
+                        continue
+                    conn.execute(
+                        '''
+                        INSERT INTO records (referencia, naviera, bl, total, fecha_recuperacion, estatus, created_at)
+                        VALUES (?, ?, ?, ?, ?, ?, ?)
+                        ''',
+                        (
+                            record['referencia'],
+                            record['naviera'],
+                            record['bl'],
+                            float(record['total']),
+                            record['fecha_recuperacion'],
+                            record['estatus'],
+                            datetime.utcnow().isoformat(timespec='seconds'),
+                        ),
+                    )
+                    inserted.append(record['referencia'])
+
+            return self._send_json({'inserted': len(inserted), 'errors': parse_errors, 'total_read': len(records)})
+
+        if path == '/api/documents/assets':
+            if not self._authorize('write'):
+                return
+            data = self._read_json_body()
+            file_content = data.get('file_content')
+            asset_type = str(data.get('asset_type') or '').strip()
+            record_id = data.get('record_id')
+            provider_name = str(data.get('provider_name') or '').strip()
+            original_name = sanitize_filename(data.get('filename') or f'{asset_type}_{uuid4().hex}.pdf')
+            if not file_content or not asset_type:
+                return self._send_json({'message': 'asset_type y file_content son obligatorios.'}, status=HTTPStatus.BAD_REQUEST)
+            file_bytes = decode_base64_file(file_content)
+            filename = f'{uuid4().hex}_{original_name}'
+            path_file = UPLOADS_DIR / filename
+            path_file.write_bytes(file_bytes)
+            with db_connection() as conn:
+                cursor = conn.execute(
+                    '''
+                    INSERT INTO document_assets (record_id, asset_type, provider_name, filename, created_at)
+                    VALUES (?, ?, ?, ?, ?)
+                    ''',
+                    (record_id, asset_type, provider_name, filename, datetime.utcnow().isoformat(timespec='seconds')),
+                )
+                created = conn.execute('SELECT * FROM document_assets WHERE id = ?', (cursor.lastrowid,)).fetchone()
+            return self._send_json(dict(created), status=HTTPStatus.CREATED)
+
+        if path == '/api/documents/finalize':
+            if not self._authorize('write'):
+                return
+            data = self._read_json_body()
+            try:
+                record_id = int(data.get('record_id'))
+                template_id = int(data.get('template_id'))
+            except (TypeError, ValueError):
+                return self._send_json({'message': 'record_id/template_id inválidos.'}, status=HTTPStatus.BAD_REQUEST)
+
+            with db_connection() as conn:
+                record = conn.execute('SELECT * FROM records WHERE id = ?', (record_id,)).fetchone()
+                template = conn.execute('SELECT * FROM document_templates WHERE id = ?', (template_id,)).fetchone()
+                if not record or not template:
+                    return self._send_json({'message': 'Registro o plantilla no encontrados.'}, status=HTTPStatus.NOT_FOUND)
+
+                filled_content = fill_template(template['content'], dict(record))
+                letter_name = f'letter_{uuid4().hex}.pdf'
+                letter_path = DOCS_DIR / letter_name
+                create_simple_pdf(filled_content, letter_path)
+
+                writer = PdfWriter()
+                for source_path in [letter_path]:
+                    reader = PdfReader(str(source_path))
+                    for page in reader.pages:
+                        writer.add_page(page)
+
+                for key in ('bank_asset_id', 'capture_asset_id', 'fiscal_asset_id'):
+                    asset_id = data.get(key)
+                    if not asset_id:
+                        continue
+                    asset = conn.execute('SELECT * FROM document_assets WHERE id = ?', (asset_id,)).fetchone()
+                    if not asset:
+                        continue
+                    reader = PdfReader(str(UPLOADS_DIR / asset['filename']))
+                    max_pages = 1 if key == 'fiscal_asset_id' else len(reader.pages)
+                    for page_idx in range(max_pages):
+                        writer.add_page(reader.pages[page_idx])
+
+                final_name = f'final_{record_id}_{uuid4().hex}.pdf'
+                final_path = DOCS_DIR / final_name
+                with open(final_path, 'wb') as handle:
+                    writer.write(handle)
+
+                cursor = conn.execute(
+                    '''
+                    INSERT INTO generated_documents (record_id, template_id, filename, created_at)
+                    VALUES (?, ?, ?, ?)
+                    ''',
+                    (record_id, template_id, final_name, datetime.utcnow().isoformat(timespec='seconds')),
+                )
+                created = conn.execute('SELECT * FROM generated_documents WHERE id = ?', (cursor.lastrowid,)).fetchone()
+
+            return self._send_json({'message': 'Documento final generado.', 'document': dict(created), 'file_url': f'/files/{final_name}'})
+
+        if path == '/api/admin/users':
+            if not self._authorize('admin'):
+                return
+            data = self._read_json_body()
+            username = str(data.get('username') or '').strip()
+            role = str(data.get('role') or 'consulta').strip()
+            permissions = data.get('permissions') or []
+            if role not in ('admin', 'operador', 'consulta'):
+                return self._send_json({'message': 'Rol inválido.'}, status=HTTPStatus.BAD_REQUEST)
+            if not username:
+                return self._send_json({'message': 'username es obligatorio.'}, status=HTTPStatus.BAD_REQUEST)
+            with db_connection() as conn:
+                try:
+                    cursor = conn.execute(
+                        'INSERT INTO users (username, role, permissions, created_at) VALUES (?, ?, ?, ?)',
+                        (username, role, json.dumps(permissions), datetime.utcnow().isoformat(timespec='seconds')),
+                    )
+                except sqlite3.IntegrityError:
+                    return self._send_json({'message': 'Usuario ya existe.'}, status=HTTPStatus.CONFLICT)
+                created = conn.execute('SELECT id, username, role, permissions, created_at FROM users WHERE id = ?', (cursor.lastrowid,)).fetchone()
+            return self._send_json(dict(created), status=HTTPStatus.CREATED)
+
+        if path == '/api/admin/config':
+            if not self._authorize('admin'):
+                return
+            data = self._read_json_body()
+            key = str(data.get('key') or '').strip()
+            value = data.get('value')
+            if not key:
+                return self._send_json({'message': 'key es obligatorio.'}, status=HTTPStatus.BAD_REQUEST)
+            with db_connection() as conn:
+                conn.execute(
+                    '''
+                    INSERT INTO system_configs (key, value, updated_at)
+                    VALUES (?, ?, ?)
+                    ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at
+                    ''',
+                    (key, json.dumps(value), datetime.utcnow().isoformat(timespec='seconds')),
+                )
+                config = conn.execute('SELECT key, value, updated_at FROM system_configs WHERE key = ?', (key,)).fetchone()
+            return self._send_json(dict(config))
 
         self.send_error(HTTPStatus.NOT_FOUND)
 
