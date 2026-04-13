@@ -23,6 +23,10 @@ Aplicación web funcional (base del sistema) con:
   - Generación de PDF.
   - Guardado de documentos dentro del sistema.
 - Barra de recordatorios (vencidos y próximos a vencer) con actualización automática.
+- Capa base de seguridad:
+  - Control de roles (RBAC básico por header `X-User-Role`).
+  - CORS restringido por origen permitido.
+  - Security headers en respuestas HTTP.
 - Backend en Python (sin frameworks externos).
 - Base de datos SQLite.
 
@@ -57,6 +61,14 @@ python3 app.py
 2. Abre en el navegador:
 
 - `http://localhost:3000`
+
+## Variables de entorno útiles
+
+- `PORT`: puerto de ejecución (Render lo inyecta automáticamente).
+- `ALLOWED_ORIGIN`: origen permitido para CORS (default: `http://localhost:3000`).
+- `DEFAULT_ROLE`: rol por defecto para RBAC (`viewer`, `editor`, `admin`; default: `admin`).
+- `DB_PROVIDER`: proveedor de base de datos (`sqlite` por defecto).  
+  > Se dejó la conectividad base preparada para extender a servicio externo en `db_connection()`.
 
 ## Uso básico
 

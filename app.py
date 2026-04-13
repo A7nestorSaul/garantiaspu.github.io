@@ -14,9 +14,21 @@ PUBLIC_DIR = ROOT / 'public'
 DATA_DIR = ROOT / 'data'
 DB_PATH = DATA_DIR / 'garantias.db'
 DOCS_DIR = DATA_DIR / 'documents'
+DB_PROVIDER = os.environ.get('DB_PROVIDER', 'sqlite').lower()
+DB_HOST = os.environ.get('DB_HOST', '')
+DB_PORT = os.environ.get('DB_PORT', '')
+DB_NAME = os.environ.get('DB_NAME', '')
+DB_USER = os.environ.get('DB_USER', '')
 HOST = '0.0.0.0'
 PORT = int(os.environ.get("PORT", 3000))
 VALID_STATUS = {'Pendiente', 'En proceso', 'Recuperado', 'Pagado'}
+ALLOWED_ORIGIN = os.environ.get('ALLOWED_ORIGIN', 'http://localhost:3000')
+DEFAULT_ROLE = os.environ.get('DEFAULT_ROLE', 'admin')
+ROLE_PERMISSIONS = {
+    'viewer': {'read'},
+    'editor': {'read', 'write'},
+    'admin': {'read', 'write', 'admin'},
+}
 
 DATA_DIR.mkdir(exist_ok=True)
 DOCS_DIR.mkdir(exist_ok=True)
@@ -75,6 +87,13 @@ def init_db():
 
 
 def db_connection():
+    # Base para conectividad futura a servicios de BD externos:
+    # hoy se usa SQLite; si DB_PROVIDER cambia en despliegue, este bloque es el punto de extensión.
+    if DB_PROVIDER != 'sqlite':
+        raise RuntimeError(
+            f'DB_PROVIDER="{DB_PROVIDER}" aún no implementado. '
+            'Configura integración externa en db_connection().'
+        )
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
     return conn
@@ -181,12 +200,61 @@ class AppHandler(SimpleHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
+    def end_headers(self):
+        self.send_header('X-Content-Type-Options', 'nosniff')
+        self.send_header('X-Frame-Options', 'DENY')
+        self.send_header('Referrer-Policy', 'same-origin')
+        self.send_header('Permissions-Policy', 'geolocation=(), microphone=(), camera=()')
+        self.send_header(
+            'Content-Security-Policy',
+            "default-src 'self'; script-src 'self' https://cdn.jsdelivr.net; style-src 'self' 'unsafe-inline'; object-src 'none'",
+        )
+        self._set_cors_headers()
+        super().end_headers()
+
+    def _set_cors_headers(self):
+        origin = self.headers.get('Origin')
+        if origin and origin == ALLOWED_ORIGIN:
+            self.send_header('Access-Control-Allow-Origin', origin)
+            self.send_header('Vary', 'Origin')
+            self.send_header('Access-Control-Allow-Headers', 'Content-Type, X-User-Role')
+            self.send_header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS')
+
+    def _cors_allowed_or_reject(self):
+        origin = self.headers.get('Origin')
+        if origin and origin != ALLOWED_ORIGIN:
+            self._send_json({'message': 'Origen no permitido por CORS.'}, status=HTTPStatus.FORBIDDEN)
+            return False
+        return True
+
+    def _get_role(self):
+        role = (self.headers.get('X-User-Role') or DEFAULT_ROLE).lower().strip()
+        return role if role in ROLE_PERMISSIONS else 'viewer'
+
+    def _authorize(self, permission):
+        role = self._get_role()
+        if permission not in ROLE_PERMISSIONS.get(role, set()):
+            self._send_json(
+                {'message': f'Permiso denegado para rol "{role}".'},
+                status=HTTPStatus.FORBIDDEN,
+            )
+            return False
+        return True
+
     def _read_json_body(self):
         length = int(self.headers.get('Content-Length', 0))
         raw = self.rfile.read(length) if length > 0 else b'{}'
         return json.loads(raw.decode('utf-8'))
 
+    def do_OPTIONS(self):
+        if not self._cors_allowed_or_reject():
+            return
+        self.send_response(HTTPStatus.NO_CONTENT)
+        self.end_headers()
+
     def do_GET(self):
+        if not self._cors_allowed_or_reject():
+            return
         parsed = urlparse(self.path)
         path = parsed.path
 
@@ -261,6 +329,8 @@ class AppHandler(SimpleHTTPRequestHandler):
         return super().do_GET()
 
     def do_POST(self):
+        if not self._cors_allowed_or_reject():
+            return
         path = urlparse(self.path).path
 
         if path == '/api/login':
@@ -277,6 +347,8 @@ class AppHandler(SimpleHTTPRequestHandler):
             return self._send_json({'message': 'Login exitoso (simulado).', 'user': {'username': username}})
 
         if path == '/api/records':
+            if not self._authorize('write'):
+                return
             data = self._read_json_body()
             error = self._validate_payload(data)
             if error:
@@ -308,6 +380,8 @@ class AppHandler(SimpleHTTPRequestHandler):
             return self._send_json(normalized_record, status=HTTPStatus.CREATED)
 
         if path == '/api/records/bulk':
+            if not self._authorize('write'):
+                return
             data = self._read_json_body()
             records = data.get('records') if isinstance(data, dict) else None
             if not isinstance(records, list) or not records:
@@ -420,6 +494,8 @@ class AppHandler(SimpleHTTPRequestHandler):
             )
 
         if path == '/api/payments/suggestions':
+            if not self._authorize('read'):
+                return
             data = self._read_json_body()
             concepts = data.get('concepts') if isinstance(data, dict) else None
             if not isinstance(concepts, list) or not concepts:
@@ -463,6 +539,8 @@ class AppHandler(SimpleHTTPRequestHandler):
             return self._send_json({'suggestions': suggestions})
 
         if path == '/api/payments/confirm':
+            if not self._authorize('write'):
+                return
             data = self._read_json_body()
             try:
                 record_id = int(data.get('record_id'))
@@ -497,6 +575,8 @@ class AppHandler(SimpleHTTPRequestHandler):
             )
 
         if path == '/api/documents/templates':
+            if not self._authorize('write'):
+                return
             data = self._read_json_body()
             name = str(data.get('name') or '').strip()
             content = str(data.get('content') or '').strip()
@@ -519,6 +599,8 @@ class AppHandler(SimpleHTTPRequestHandler):
             return self._send_json(dict(created), status=HTTPStatus.CREATED)
 
         if path == '/api/documents/generate':
+            if not self._authorize('write'):
+                return
             data = self._read_json_body()
             try:
                 record_id = int(data.get('record_id'))
@@ -564,9 +646,13 @@ class AppHandler(SimpleHTTPRequestHandler):
         self.send_error(HTTPStatus.NOT_FOUND)
 
     def do_PUT(self):
+        if not self._cors_allowed_or_reject():
+            return
         path = urlparse(self.path).path
         if not path.startswith('/api/records/'):
             return self.send_error(HTTPStatus.NOT_FOUND)
+        if not self._authorize('write'):
+            return
 
         try:
             record_id = int(path.split('/')[-1])
@@ -608,9 +694,13 @@ class AppHandler(SimpleHTTPRequestHandler):
         return self._send_json(normalized_record)
 
     def do_DELETE(self):
+        if not self._cors_allowed_or_reject():
+            return
         path = urlparse(self.path).path
         if not path.startswith('/api/records/'):
             return self.send_error(HTTPStatus.NOT_FOUND)
+        if not self._authorize('write'):
+            return
 
         try:
             record_id = int(path.split('/')[-1])
